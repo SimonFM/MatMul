@@ -323,7 +323,7 @@ int main(int argc, char ** argv)
   gettimeofday(&stop_time, NULL);
   mul_time = ((stop_time.tv_sec - start_time.tv_sec) * 1000000L) +
              (stop_time.tv_usec - start_time.tv_usec);
-  printf("matmul time:      %lld microseconds\n", mul_time);
+  printf("matmul      time: %lld microseconds\n", mul_time);
 
   /*
     Record starting time 
