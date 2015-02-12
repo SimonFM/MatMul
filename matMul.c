@@ -8,8 +8,9 @@
 #include <sys/time.h>
 #include <assert.h>
 #include <omp.h>
-
 #include <xmmintrin.h>
+#include <pthread.h>
+#include <unistd.h>     // sysconf()
 
 /*
   The following two definitions of DEBUGGING control whether or not
@@ -25,11 +26,37 @@
 
 #define DEBUGGING(_x)
 
+// Unit stored in matrices
 struct complex 
 {
   float real;
   float imag;
 };
+
+// Matrix indices passed to pthread slave function
+struct thread_args
+{
+  int i;
+  int j;
+};
+
+/*
+  The following globals are used by the pthread slave function
+*/
+struct complex ** GA;   // Copy of pointer to matrix A
+struct complex ** GB;   // Copy of pointer to matrix B
+struct complex ** GC;   // Copy of pointer to matrix C
+int A_DIM2;             // Number of columns in A
+
+/*
+  The sheer size of the following two matrices should be indicative of the
+  impracticality and naivety of the current parallelisation effort, which is a
+  proof of concept. YOU'VE BEEN WARNED!
+*/
+// Array of pthreads, one for each element in C
+pthread_t ** THREADS;
+// Array of arguments to pthread slave, one for each element in C
+struct thread_args ** ARG_ARRAY;
 
 /*
   Write matrix to stdout
@@ -46,7 +73,7 @@ void write_out(struct complex ** a, int dim1, int dim2)
   }
 }
 
-/* 
+/*
   Create new empty matrix 
 */
 struct complex ** new_empty_matrix(int dim1, int dim2)
@@ -54,7 +81,7 @@ struct complex ** new_empty_matrix(int dim1, int dim2)
   struct complex ** result = malloc(sizeof(struct complex*) * dim1);
   struct complex * new_matrix = malloc(sizeof(struct complex) * dim1 * dim2);
 
-  for ( int i = 0; i < dim1; i++ ) 
+  for ( int i = 0; i < dim1; i++ )
   {
     result[i] = &new_matrix[i * dim2];
   }
@@ -62,14 +89,14 @@ struct complex ** new_empty_matrix(int dim1, int dim2)
   return result;
 }
 
-/* 
+/*
   Take a copy of the matrix and return in a newly allocated matrix
 */
 struct complex ** copy_matrix(struct complex ** source_matrix, int dim1, int dim2)
 {
   struct complex ** result = new_empty_matrix(dim1, dim2);
 
-  for ( int i = 0; i < dim1; i++ ) 
+  for ( int i = 0; i < dim1; i++ )
   {
     for ( int j = 0; j < dim2; j++ )
     {
@@ -79,7 +106,7 @@ struct complex ** copy_matrix(struct complex ** source_matrix, int dim1, int dim
   return result;
 }
 
-/* 
+/*
   Create a matrix and fill it with random numbers 
 */
 struct complex ** gen_random_matrix(int dim1, int dim2)
@@ -91,14 +118,14 @@ struct complex ** gen_random_matrix(int dim1, int dim2)
 
   result = new_empty_matrix(dim1, dim2);
 
-  /* 
+  /*
     Use the microsecond part of the current time as a pseudo-random seed
   */
   gettimeofday(&seedtime, NULL);
   seed = seedtime.tv_usec;
   srandom(seed);
 
-  /* 
+  /*
     Fill the matrix with random numbers 
   */
   for ( int i = 0; i < dim1; i++ )
@@ -117,7 +144,7 @@ struct complex ** gen_random_matrix(int dim1, int dim2)
   return result;
 }
 
-/* 
+/*
   Check the sum of absolute differences is within reasonable epsilon
 */
 void check_result(struct complex ** result, struct complex ** control, int dim1, int dim2)
@@ -126,7 +153,7 @@ void check_result(struct complex ** result, struct complex ** control, int dim1,
   double sum_abs_diff = 0.0;
   const double EPSILON = 0.0625;
 
-  for ( int i = 0; i < dim1; i++ ) 
+  for ( int i = 0; i < dim1; i++ )
   {
     for ( int j = 0; j < dim2; j++ )
     {
@@ -137,14 +164,14 @@ void check_result(struct complex ** result, struct complex ** control, int dim1,
     }
   }
 
-  if ( sum_abs_diff > EPSILON ) 
+  if ( sum_abs_diff > EPSILON )
   {
     fprintf(stderr, "WARNING: sum of absolute differences (%f) > EPSILON (%f)\n",
             sum_abs_diff, EPSILON);
   }
 }
 
-/* 
+/*
   Multiply matrix A times matrix B and put result in matrix C
 */
 void matmul(struct complex ** A, struct complex ** B, struct complex ** C, 
@@ -169,27 +196,54 @@ void matmul(struct complex ** A, struct complex ** B, struct complex ** C,
   }
 }
 
-/* 
+/*
+  Pthread slave function. Each one carries out one dot product calculation.
+*/
+void * dotProd(void * args)
+{
+  struct thread_args * arg = (struct thread_args *)args;
+  struct complex sum = {0.0, 0.0};
+  int i = arg->i, j = arg->j;
+
+  for ( int k = 0; k < A_DIM2; k++ )
+  {
+    // the following code does: sum += A[i][k] * B[k][j];
+    sum.real += (GA[i][k].real * GB[k][j].real) -
+                (GA[i][k].imag * GB[k][j].imag);
+    sum.imag += (GA[i][k].real * GB[k][j].imag) +
+                (GA[i][k].imag * GB[k][j].real);
+  }
+  GC[i][j] = sum;
+
+  pthread_exit(NULL);
+}
+
+/*
   The fast version of matmul written by the team
 */
 void team_matmul(struct complex ** A, struct complex ** B, struct complex ** C,
                  int a_dim1, int a_dim2, int b_dim2)
 {
-  struct complex sum;
+  int rc;   // pthread_create() return code
+
+  // Global copies for slave function
+  GA = A; GB = B; GC = C;
+  A_DIM2 = a_dim2;
 
   for ( int i = 0; i < a_dim1; i++ )
   {
     for( int j = 0; j < b_dim2; j++ )
     {
-      sum.real = 0.0;
-      sum.imag = 0.0;
-      for ( int k = 0; k < a_dim2; k++ )
-      {
-        // the following code does: sum += A[i][k] * B[k][j];
-        sum.real += A[i][k].real * B[k][j].real - A[i][k].imag * B[k][j].imag;
-        sum.imag += A[i][k].real * B[k][j].imag + A[i][k].imag * B[k][j].real;
+      // Assign each dot product calculation to a new pthread... GENIUS!
+      ARG_ARRAY[i][j].i = i;
+      ARG_ARRAY[i][j].j = j;
+      rc = pthread_create(&THREADS[i][j], NULL, dotProd,
+                          (void *) &ARG_ARRAY[i][j]);
+      if (rc) {
+        printf("ERROR return code from pthread_create(): %d\n", rc);
+        printf("Thread number: %d\n", i * j);
+        exit(-1);
       }
-      C[i][j] = sum;
     }
   }
 }
@@ -235,6 +289,19 @@ int main(int argc, char ** argv)
   C = new_empty_matrix(a_dim1, b_dim2);
   control_matrix = new_empty_matrix(a_dim1, b_dim2);
 
+  // Allocate pthread array
+  THREADS = malloc(sizeof(*THREADS) * a_dim1);
+  for ( int i = 0; i < a_dim1; i++ )
+  {
+    THREADS[i] = malloc(sizeof(**THREADS) * b_dim2);
+  }
+  // Allocate slave function parameter array
+  ARG_ARRAY = malloc(sizeof(*ARG_ARRAY) * a_dim1);
+  for ( int i = 0; i < a_dim1; i++ )
+  {
+    ARG_ARRAY[i] = malloc(sizeof(**ARG_ARRAY) * b_dim2);
+  }
+
   DEBUGGING(puts("First matrix:"));
   DEBUGGING(write_out(A, a_dim1, a_dim2));
   DEBUGGING(puts("Second matrix:"));
@@ -279,7 +346,7 @@ int main(int argc, char ** argv)
   DEBUGGING(puts("Resultant matrix:"));
   DEBUGGING(write_out(C, a_dim1, b_dim2));
 
-  /* 
+  /*
     Now check that the team's matmul routine gives the same answer
     as the known working version 
   */
