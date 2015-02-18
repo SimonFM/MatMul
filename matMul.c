@@ -206,13 +206,18 @@ void matmul(struct complex ** A, struct complex ** B, struct complex ** C,
 */
 void * dotProd(void * args) {
 
+  // Slave thread arguments
   struct thread_args * arg = (struct thread_args *) args;
-  struct complex sum;
-  const int i0 = arg->i0;
-  const int i1 = arg->i1;
 
-  for (int i = i0; (i < i1) && (i < _a_dim1); i++) {
-    for (int j = 0; (j < _b_dim2); j++) {
+  // Each thread iterates over min(i1, a_dim1) rows of A and
+  // min(j1, b_dim2) columns of B
+  const int i_limit = (arg->i1 < _a_dim1) ? arg->i1 : _a_dim1;
+  const int j_limit = (arg->j1 < _b_dim2) ? arg->j1 : _b_dim2;
+
+  struct complex sum;
+
+  for (int i = arg->i0; (i < i_limit); i++) {
+    for (int j = arg->j0; (j < j_limit); j++) {
       sum = (struct complex){0.0, 0.0};
       for (int k = 0; (k < _a_dim2); k++) {
         // The following code does: sum += A[i][k] * B[k][j];
@@ -235,8 +240,8 @@ void team_matmul(struct complex ** A, struct complex ** B, struct complex ** C,
                  int a_dim1, int a_dim2, int b_dim2) {
 
   // Fall back to matmul() on small input
-  // if ((a_dim1 < NCORES) && (b_dim2 < NCORES)) {
-  if (a_dim1 < NCORES) {
+  if ((a_dim1 < NCORES) && (b_dim2 < NCORES)) {
+
     struct complex sum;
 
     for (int i = 0; (i < a_dim1); i++) {
@@ -251,30 +256,58 @@ void team_matmul(struct complex ** A, struct complex ** B, struct complex ** C,
       }
     }
     return;
+
   }
 
-  int rc;
-  const int DELTA = (a_dim1 + NCORES - 1) / NCORES;
+  /*
+    We now know that one of the matrix dimensions is larger than the number of
+    cores we have, so there is (usually) a reasonably large workload to
+    distribute amongst all cores (particularly on stoker).
+  */
 
+  // Make global copies of parameters for slave threads
+  _A = A; _B = B; _C = C;
+  _a_dim1 = a_dim1; _a_dim2 = a_dim2; _b_dim2 = b_dim2;
+
+  // Arrays of pthreads and their arguments
   pthread_t threads[NCORES];
   struct thread_args args[NCORES];
 
-  for (int i = 0; (i < NCORES); i++) {
-    args[i] = (struct thread_args){i * DELTA, (i + 1) * DELTA};
-    rc = pthread_create(&threads[i], NULL, dotProd, (void *) &args[i]);
-    if (rc) {
-      fprintf(stderr, "ERROR return code from pthread_create(): %d\n", rc);
-      fprintf(stderr, "Thread number: %d\n", i);
-      exit(-1);
+  // Distribute largest dimension (either rows or columns) amongst cores
+  if (a_dim1 < b_dim2) {
+
+    // Difference in B column indices between threads
+    const int DELTA = (b_dim2 + NCORES - 1) / NCORES;
+
+    int col = 0;
+    for (int i = 0; (i < NCORES); i++) {
+      args[i] = (struct thread_args){0, a_dim1, col, col + DELTA};
+      pthread_create(&threads[i], NULL, dotProd, (void *) &args[i]);
+      col += DELTA;
     }
+
+  } else {
+
+    // Difference in A row indices between threads
+    const int DELTA = (a_dim1 + NCORES - 1) / NCORES;
+
+    int row = 0;
+    for (int i = 0; (i < NCORES); i++) {
+      args[i] = (struct thread_args){row, row + DELTA, 0, b_dim2};
+      pthread_create(&threads[i], NULL, dotProd, (void *) &args[i]);
+      row += DELTA;
+    }
+
   }
+
+  // Round up the slaves :(
   for (int i = 0; (i < NCORES); i++) {
     pthread_join(threads[i], NULL);
   }
 }
 
 /*
-  Returns the difference, in microseconds, between the two given times
+  Returns the difference, in microseconds, between the two given times.
 */
 long long time_diff(struct timeval * start, struct timeval *end) {
   return ((end->tv_sec - start->tv_sec) * 1000000L) +
@@ -282,7 +315,7 @@ long long time_diff(struct timeval * start, struct timeval *end) {
 }
 
 /*
-  Main harness
+  Main harness.
 */
 int main(int argc, char ** argv) {
 
@@ -292,8 +325,6 @@ int main(int argc, char ** argv) {
   int a_dim1, a_dim2, b_dim1, b_dim2;
   struct timeval time0, time1, time2;
   double speedup;
-
-  printf("NCORES = %d\n", NCORES);
 
   if (argc != 5) {
     fputs("Usage: matMul <A nrows> <A ncols> <B nrows> <B ncols>\n", stderr);
@@ -325,9 +356,6 @@ int main(int argc, char ** argv) {
     write_out(B, b_dim1, b_dim2);
     puts("");
   })
-
-  _a_dim1 = a_dim1; _a_dim2 = a_dim2; _b_dim2 = b_dim2;
-  _A = A; _B = B; _C = C;
 
   // Record control start time
   gettimeofday(&time0, NULL);
@@ -364,10 +392,10 @@ int main(int argc, char ** argv) {
   // Now check that team_matmul() gives the same answer as the control
   check_result(C, ctrl_matrix, a_dim1, b_dim2);
 
-  DEBUGGING( {
+  DEBUGGING({
     puts("Resultant matrix:");
     write_out(C, a_dim1, b_dim2);
-  } )
+  })
 
   // Free all matrices
   free_matrix(A);

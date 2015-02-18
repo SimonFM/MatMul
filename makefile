@@ -1,16 +1,16 @@
 
-CC		= gcc
+CC       = gcc
 
 # Allows passing extra compilation flags.
 # Intended for passing `FLAG="-DDEBUG"`
-FLAG    =
+FLAG     =
 
-CFLAGS	= -std=gnu11 -DNCORES=$(shell getconf _NPROCESSORS_ONLN)
-CFLAGS += $(FLAG)
+CFLAGS   = -std=gnu11 -DNCORES=$(shell getconf _NPROCESSORS_ONLN)
+CFLAGS  += $(FLAG)
 
-LDFLAGS	= -lpthread
+LDFLAGS  = -lpthread
 
-TARGET	= matMul
+TARGET   = matMul
 
 $(TARGET): $(TARGET).c
 	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
