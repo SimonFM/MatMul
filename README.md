@@ -4,22 +4,19 @@ Parallel matrix multiplication.
 
 ### Usage
 
-Compile with
-
-```
-gcc -std=gnu11 matMul.c -o matMul
-```
-
 Run with
 
 ```
-./matMul <A nrows> <A ncols> <B nrows> <B ncols>
+./run <A nrows> <A ncols> <B nrows> <B ncols>
 ```
 
-##### Pthreads
-
-Compile pthread branch with
+Run in debug mode
 
 ```
-gcc -std=gnu11 matMul.c -o matMul -lpthread
+./run -d <A nrows> <A ncols> <B nrows> <B ncols>
 ```
+
+The `run` script invokes `make` with the corresponding flags. The `makefile`, in
+turn, compiles `matMul.c` with a preprocessor option that defines `NCORES` as
+the number of online cores on the system. This determines the maximum number of
+pthreads spawned.

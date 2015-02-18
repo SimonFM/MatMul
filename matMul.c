@@ -1,6 +1,10 @@
 /*
   Test and timing harness program for developing a dense matrix multiplication
-  routine for the CS3014 module
+  routine for the CS3014 module.
+
+  Authors:  Basil L. Contovounesios
+            Ben Lynch
+            Simon Markham
 */
 
 #include <stdio.h>
@@ -10,48 +14,62 @@
 #include <omp.h>
 #include <xmmintrin.h>
 #include <pthread.h>
-#include <unistd.h>     // sysconf()
+
+/*
+  Uncomment the following to use sysconf(_SC_NPROCESSORS_ONLN) to determine
+  number of online cores on the system.
+*/
+// #include <unistd.h>
 
 /*
   The following two definitions of DEBUGGING control whether or not debugging
-  information is written out. To put the program into debugging mode, uncomment
-  the following line:
+  information is written out. Defining DEBUG, e.g. via preprocessor options
+  at compilation, puts the program into debugging mode.
 */
-
-// #define DEBUGGING(_x) _x 
+#ifdef DEBUG
+#define DEBUGGING(_x) _x
+#else
+#define DEBUGGING(_x)
+#endif
 
 /*
-  To stop the printing of debugging information, use the following line: 
+  The following definition reflects the number of online cores on the system
+  and determines the maximum number of pthreads created. It defaults to 64,
+  which is the number of cores on the target machine stoker. It is intended to
+  be defined at compilation via a preprocessor option if run on a different
+  target.
 */
+#ifndef NCORES
+#define NCORES 64
+#endif
 
-#define DEBUGGING(_x)
-
-// Unit stored in matrices
+/*
+  Complex number unit stored in matrices.
+*/
 struct complex {
   float real;
   float imag;
 };
 
-// Matrix indices passed to pthread slave function
+/*
+  Matrix indices passed to pthread slave function. Each slave takes on the rows
+  of A in the interval [i0, i1) and the columns of B in the interval [j0, j1).
+*/
 struct thread_args {
-  int i0;
-  int i1;
-  int j0;
-  int j1;
+  int i0; int i1;
+  int j0; int j1;
 };
 
 /*
-  The following globals are used by the pthread slave function
+  The following globals are used by the pthread slave function.
 */
 struct complex ** _A;           // Copy of pointer to matrix A
 struct complex ** _B;           // Copy of pointer to matrix B
 struct complex ** _C;           // Copy of pointer to matrix C
-int _a_dim1, _a_dim2, _b_dim2;  // Number of columns in A
-
-const int NCORES = 64;
+int _a_dim1, _a_dim2, _b_dim2;  // Copy of dimensions of A and B
 
 /*
-  Write matrix to stdout
+  Write matrix to stdout.
 */
 void write_out(struct complex ** a, int dim1, int dim2) {
   for (int i = 0; (i < dim1); i++) {
@@ -63,7 +81,7 @@ void write_out(struct complex ** a, int dim1, int dim2) {
 }
 
 /*
-  Create new empty matrix 
+  Create new empty matrix.
 */
 struct complex ** new_empty_matrix(int dim1, int dim2) {
 
@@ -77,13 +95,16 @@ struct complex ** new_empty_matrix(int dim1, int dim2) {
   return result;
 }
 
+/*
+  Free matrix.
+*/
 void free_matrix(struct complex ** matrix) {
   free (matrix[0]); // Free the contents
   free (matrix);    // Free the header
 }
 
 /*
-  Take a copy of the matrix and return in a newly allocated matrix
+  Take a copy of the matrix and return in a newly allocated matrix.
 */
 struct complex ** copy_matrix(struct complex ** source_matrix,
                               int dim1, int dim2) {
@@ -100,7 +121,7 @@ struct complex ** copy_matrix(struct complex ** source_matrix,
 }
 
 /*
-  Create a matrix and fill it with random numbers 
+  Create a matrix and fill it with random numbers.
 */
 struct complex ** gen_random_matrix(int dim1, int dim2) {
 
@@ -134,7 +155,7 @@ struct complex ** gen_random_matrix(int dim1, int dim2) {
 }
 
 /*
-  Check the sum of absolute differences is within reasonable epsilon
+  Check the sum of absolute differences is within reasonable epsilon.
 */
 void check_result(struct complex ** result, struct complex ** control,
                   int dim1, int dim2) {
@@ -159,7 +180,7 @@ void check_result(struct complex ** result, struct complex ** control,
 }
 
 /*
-  Multiply matrix A times matrix B and put result in matrix C
+  Multiply matrix A times matrix B and put result in matrix C.
 */
 void matmul(struct complex ** A, struct complex ** B, struct complex ** C, 
             int a_dim1, int a_dim2, int b_dim2) {
@@ -180,15 +201,19 @@ void matmul(struct complex ** A, struct complex ** B, struct complex ** C,
 }
 
 /*
-  Pthread slave function. Each one carries out one dot product calculation.
+  Pthread slave function. Each one carries out a number of dot product
+  calculations in the given intervals of rows of A and columns of B.
 */
 void * dotProd(void * args) {
 
-  struct thread_args * arg = (struct thread_args *)args;
-  struct complex sum = {0.0, 0.0};
+  struct thread_args * arg = (struct thread_args *) args;
+  struct complex sum;
+  const int i0 = arg->i0;
+  const int i1 = arg->i1;
 
-  for (int i = arg->i0; (i < _a_dim1) && (i < arg->i1); i++) {
-    for (int j = arg->j0; (j < _b_dim2) && (j < arg->j1); j++) {
+  for (int i = i0; (i < i1) && (i < _a_dim1); i++) {
+    for (int j = 0; (j < _b_dim2); j++) {
+      sum = (struct complex){0.0, 0.0};
       for (int k = 0; (k < _a_dim2); k++) {
         // The following code does: sum += A[i][k] * B[k][j];
         sum.real += (_A[i][k].real * _B[k][j].real) -
@@ -204,83 +229,13 @@ void * dotProd(void * args) {
 }
 
 /*
-  The fast version of matmul written by the team
+  The fast version of matmul() written by the team.
 */
 void team_matmul(struct complex ** A, struct complex ** B, struct complex ** C,
                  int a_dim1, int a_dim2, int b_dim2) {
 
-  int rc;
-  int i0 = 0, i1 = 0, j0 = 0, j1 = 0;
-
-  const long ncores = sysconf(_SC_NPROCESSORS_ONLN);
-  const int DELTA_I = (a_dim1 / ncores) + (a_dim1 % ncores != 0);
-  const int DELTA_J = (b_dim2 / ncores) + (b_dim2 % ncores != 0);
-  // const int nthreads = (a_dim1 / DELTA_I
-
-  pthread_t * threads = malloc(sizeof(*threads) * ncores);
-  struct thread_args * arg_array = malloc(sizeof(*arg_array) * ncores);
-
-  printf("DI = %d\n", DELTA_I);
-  printf("DJ = %d\n", DELTA_J);
-
-  for (int i = 0; ((i1 >= a_dim1) || (j1 >= b_dim2)) && (i < ncores); i++) {
-    i0 = i * DELTA_I; i1 = i0 + DELTA_I;
-    j0 = i * DELTA_J; j1 = j0 + DELTA_J;
-    printf("thread %d\n", i);
-    printf("i0 = %d\n", i0);
-    printf("i1 = %d\n", i1);
-    printf("j0 = %d\n", j0);
-    printf("j1 = %d\n", j1);
-    arg_array[i] = (struct thread_args){i0, i1, j0, j1};
-    rc = pthread_create(&threads[i], NULL, dotProd, (void *) &arg_array[i]);
-    if (rc) {
-      fprintf(stderr, "ERROR return code from pthread_create(): %d\n", rc);
-      fprintf(stderr, "Thread number: %d\n", i);
-      exit(-1);
-    }
-  }
-  for (int i = 0; (i < ncores); i++) {
-    pthread_join(threads[i], NULL);
-  }
-}
-
-struct t_args {
-  int i0;
-  int i1;
-};
-
-void * dProd(void * args) {
-
-  struct t_args * arg = (struct t_args *) args;
-  struct complex sum;
-  const int i0 = arg->i0;
-  const int i1 = arg->i1;
-  // printf("dProd%d i0 = %d\n", i0, i0);
-  // printf("dProd%d i1 = %d\n", i0, i1);
-
-  for (int i = i0; (i < i1) && (i < _a_dim1); i++) {
-    // printf("dProd%d i = %d\n", i0, i);
-    for (int j = 0; (j < _b_dim2); j++) {
-      sum = (struct complex){0.0, 0.0};
-      // printf("dProd%d j = %d\n", i0, j);
-      for (int k = 0; (k < _a_dim2); k++) {
-        // printf("dProd%d k = %d\n", i0, k);
-        // The following code does: sum += A[i][k] * B[k][j];
-        sum.real += (_A[i][k].real * _B[k][j].real) -
-                    (_A[i][k].imag * _B[k][j].imag);
-        sum.imag += (_A[i][k].real * _B[k][j].imag) +
-                    (_A[i][k].imag * _B[k][j].real);
-      }
-      _C[i][j] = sum;
-    }
-  }
-
-  pthread_exit(NULL);
-}
-
-void tmatmul(struct complex ** A, struct complex ** B, struct complex ** C,
-             int a_dim1, int a_dim2, int b_dim2) {
-
+  // Fall back to matmul() on small input
+  // if ((a_dim1 < NCORES) && (b_dim2 < NCORES)) {
   if (a_dim1 < NCORES) {
     struct complex sum;
 
@@ -299,18 +254,14 @@ void tmatmul(struct complex ** A, struct complex ** B, struct complex ** C,
   }
 
   int rc;
-  const int DELTA = (a_dim1 / NCORES) + (a_dim1 % NCORES != 0);
-  // printf("DELTA = %d\n", DELTA);
+  const int DELTA = (a_dim1 + NCORES - 1) / NCORES;
 
-  pthread_t  * threads = malloc(sizeof(*threads) * NCORES);
-  struct t_args * args = malloc(sizeof(*args)    * NCORES);
+  pthread_t threads[NCORES];
+  struct thread_args args[NCORES];
 
   for (int i = 0; (i < NCORES); i++) {
-    // printf("Thread %d\n", i);
-    // printf("i0 = %d\n", i * DELTA);
-    // printf("i1 = %d\n", (i + 1) * DELTA);
-    args[i] = (struct t_args){i * DELTA, (i + 1) * DELTA};
-    rc = pthread_create(&threads[i], NULL, dProd, (void *) &args[i]);
+    args[i] = (struct thread_args){i * DELTA, (i + 1) * DELTA};
+    rc = pthread_create(&threads[i], NULL, dotProd, (void *) &args[i]);
     if (rc) {
       fprintf(stderr, "ERROR return code from pthread_create(): %d\n", rc);
       fprintf(stderr, "Thread number: %d\n", i);
@@ -341,6 +292,8 @@ int main(int argc, char ** argv) {
   int a_dim1, a_dim2, b_dim1, b_dim2;
   struct timeval time0, time1, time2;
   double speedup;
+
+  printf("NCORES = %d\n", NCORES);
 
   if (argc != 5) {
     fputs("Usage: matMul <A nrows> <A ncols> <B nrows> <B ncols>\n", stderr);
@@ -391,7 +344,7 @@ int main(int argc, char ** argv) {
   gettimeofday(&time1, NULL);
 
   // Perform matrix multiplication
-  tmatmul(A, B, C, a_dim1, a_dim2, b_dim2);
+  team_matmul(A, B, C, a_dim1, a_dim2, b_dim2);
 
   // Record finishing time
   gettimeofday(&time2, NULL);
