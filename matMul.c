@@ -190,9 +190,9 @@ void team_matmul(struct complex ** A, struct complex ** B, struct complex ** C,
                  int a_dim1, int a_dim2, int b_dim2) {
 
   struct complex sum;
-  #pragma omp parallel for
+  #pragma omp parallel for if (a_dim1 >= NCORES)
   for (int i = 0; i < a_dim1; i++) {
-    #pragma omp parallel for private(sum)
+    #pragma omp parallel for if (b_dim2 >= NCORES) private(sum)
     for(int j = 0; j < b_dim2; j++) {
       sum = (struct complex){0.0, 0.0};
       for (int k = 0; k < a_dim2; k++) {
