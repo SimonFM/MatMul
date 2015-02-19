@@ -52,23 +52,6 @@ struct complex {
 };
 
 /*
-  Matrix indices passed to pthread slave function. Each slave takes on the rows
-  of A in the interval [i0, i1) and the columns of B in the interval [j0, j1).
-*/
-struct thread_args {
-  int i0; int i1;
-  int j0; int j1;
-};
-
-/*
-  The following globals are used by the pthread slave function.
-*/
-struct complex ** _A;           // Copy of pointer to matrix A
-struct complex ** _B;           // Copy of pointer to matrix B
-struct complex ** _C;           // Copy of pointer to matrix C
-int _a_dim1, _a_dim2, _b_dim2;  // Copy of dimensions of A and B
-
-/*
   Write matrix to stdout.
 */
 void write_out(struct complex ** a, int dim1, int dim2) {
@@ -201,108 +184,24 @@ void matmul(struct complex ** A, struct complex ** B, struct complex ** C,
 }
 
 /*
-  Pthread slave function. Each one carries out a number of dot product
-  calculations in the given intervals of rows of A and columns of B.
-*/
-void * dotProd(void * args) {
-
-  // Slave thread arguments
-  struct thread_args * arg = (struct thread_args *) args;
-
-  // Each thread iterates over min(i1, a_dim1) rows of A and
-  // min(j1, b_dim2) columns of B
-  const int i_limit = (arg->i1 < _a_dim1) ? arg->i1 : _a_dim1;
-  const int j_limit = (arg->j1 < _b_dim2) ? arg->j1 : _b_dim2;
-
-  struct complex sum;
-
-  for (int i = arg->i0; (i < i_limit); i++) {
-    for (int j = arg->j0; (j < j_limit); j++) {
-      sum = (struct complex){0.0, 0.0};
-      for (int k = 0; (k < _a_dim2); k++) {
-        // The following code does: sum += A[i][k] * B[k][j];
-        sum.real += (_A[i][k].real * _B[k][j].real) -
-                    (_A[i][k].imag * _B[k][j].imag);
-        sum.imag += (_A[i][k].real * _B[k][j].imag) +
-                    (_A[i][k].imag * _B[k][j].real);
-      }
-      _C[i][j] = sum;
-    }
-  }
-
-  pthread_exit(NULL);
-}
-
-/*
   The fast version of matmul() written by the team.
 */
 void team_matmul(struct complex ** A, struct complex ** B, struct complex ** C,
                  int a_dim1, int a_dim2, int b_dim2) {
 
-  // Fall back to matmul() on small input
-  if ((a_dim1 < NCORES) && (b_dim2 < NCORES)) {
-
-    struct complex sum;
-
-    for (int i = 0; (i < a_dim1); i++) {
-      for(int j = 0; (j < b_dim2); j++) {
-        sum = (struct complex){0.0, 0.0};
-        for (int k = 0; (k < a_dim2); k++) {
-          // The following code does: sum += A[i][k] * B[k][j];
-          sum.real += A[i][k].real * B[k][j].real - A[i][k].imag * B[k][j].imag;
-          sum.imag += A[i][k].real * B[k][j].imag + A[i][k].imag * B[k][j].real;
-        }
-        C[i][j] = sum;
+  struct complex sum;
+  #pragma omp parallel for
+  for (int i = 0; i < a_dim1; i++) {
+    #pragma omp parallel for private(sum)
+    for(int j = 0; j < b_dim2; j++) {
+      sum = (struct complex){0.0, 0.0};
+      for (int k = 0; k < a_dim2; k++) {
+        // The following code does: sum += A[i][k] * B[k][j];
+        sum.real += A[i][k].real * B[k][j].real - A[i][k].imag * B[k][j].imag;
+        sum.imag += A[i][k].real * B[k][j].imag + A[i][k].imag * B[k][j].real;
       }
+      C[i][j] = sum;
     }
-    return;
-
-  }
-
-  /*
-    We now know that one of the matrix dimensions is larger than the number of
-    cores we have, so there is (usually) a reasonably large workload to
-    distribute amongst all cores (particularly on stoker).
-  */
-
-  // Make global copies of parameters for slave threads
-  _A = A; _B = B; _C = C;
-  _a_dim1 = a_dim1; _a_dim2 = a_dim2; _b_dim2 = b_dim2;
-
-  // Arrays of pthreads and their arguments
-  pthread_t threads[NCORES];
-  struct thread_args args[NCORES];
-
-  // Distribute largest dimension (either rows or columns) amongst cores
-  if (a_dim1 < b_dim2) {
-
-    // Difference in B column indices between threads
-    const int DELTA = (b_dim2 + NCORES - 1) / NCORES;
-
-    int col = 0;
-    for (int i = 0; (i < NCORES); i++) {
-      args[i] = (struct thread_args){0, a_dim1, col, col + DELTA};
-      pthread_create(&threads[i], NULL, dotProd, (void *) &args[i]);
-      col += DELTA;
-    }
-
-  } else {
-
-    // Difference in A row indices between threads
-    const int DELTA = (a_dim1 + NCORES - 1) / NCORES;
-
-    int row = 0;
-    for (int i = 0; (i < NCORES); i++) {
-      args[i] = (struct thread_args){row, row + DELTA, 0, b_dim2};
-      pthread_create(&threads[i], NULL, dotProd, (void *) &args[i]);
-      row += DELTA;
-    }
-
-  }
-
-  // Round up the slaves :(
-  for (int i = 0; (i < NCORES); i++) {
-    pthread_join(threads[i], NULL);
   }
 }
 
