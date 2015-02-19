@@ -5,10 +5,13 @@ CC       = gcc
 # Intended for passing `FLAG="-DDEBUG"`
 FLAG     =
 
+OPT      = -O0
+
 CFLAGS   = -std=gnu11 -DNCORES=$(shell getconf _NPROCESSORS_ONLN)
+CFLAGS  += $(OPT)
 CFLAGS  += $(FLAG)
 
-LDFLAGS  = -lpthread
+LDFLAGS  = -lpthread -fopenmp
 
 TARGET   = matMul
 
