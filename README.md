@@ -30,8 +30,7 @@ or
 where the former dictates both dimensions for each matrix and the latter
 multiplies two `size x size` matrices.
 
-Try invoking the `run` script with no arguments to print a helpful description
-of its usage.
+Try invoking `./run --help` to print a helpful description of its usage.
 
 ### Contents
 

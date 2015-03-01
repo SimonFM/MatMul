@@ -1,4 +1,3 @@
-
 # ------------------------------------------------------------------------------
 # Makefile for the MatMul matrix multiplication program.
 #           
@@ -34,9 +33,7 @@ define prog_HELP
 @ echo '    distclean   Remove the generated build/ directory and all of its contents.'
 endef
 
-override CFLAGS   += -std=gnu11 -march=native -O3
-override CPPFLAGS += -DNCORES=$(shell getconf _NPROCESSORS_ONLN)
-override LDFLAGS  += -lpthread
+override CFLAGS += -std=gnu11 -march=native -O3
 
 .PHONY: all help clean distclean
 

@@ -1,4 +1,3 @@
-
 /*
   Header defining the complex unit stored in matrices of the MatMul program.
 

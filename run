@@ -8,44 +8,53 @@
 # This code is distributed under the BSD3 license. See AUTHORS, LICENSE.
 # ------------------------------------------------------------------------------
 
-TARGET='./build/matmul'
+# VARIABLES --------------------------------------------------------------------
 
-USAGE='
-NAME
+TARGET='./build/matmul'
+CPPFLAG=''
+
+USAGE=\
+"NAME
     run - convenience build script for the MatMul program.
 
 SYNOPSIS
-    ./run [OPTION] <A nrows> <A ncols> <B nrows> <B ncols>
+    ./run [-d] <A nrows> <A ncols> <B nrows> <B ncols>
+    ./run -c
+    ./run -h
 
 DESCRIPTION
     Runs the MatMul matrix multiplication program, optionally in debug mode,
     with the given matrix dimensions.
 
 OPTIONS
-    -h      Print this help message.
+    -c, --clean
+        Invoke 'make clean'.
 
-    -d      Run in debug mode, printing the elements of the input and resultant
-            matrices.'
+    -d, --debug
+        Run in debug mode, printing the elements of the input and resultant
+        matrices.
 
+    -h, --help
+        Print this help message."
+
+# FUNCTIONS --------------------------------------------------------------------
+
+# Prints the first given argument, followed by the script's usage, before
+# exiting unsuccessfully.
 print_exit() {
   echo "$1"
+  echo ""
   echo "$USAGE"
   exit 1
 }
 
-run_with() {
-  make clean && make && $TARGET $@
-}
-
-debug_with() {
-  make clean && make CPPFLAGS="-DDEBUG" && $TARGET $@
-}
-
+# Exits unsuccessfully if any of the given arguments are no valid matrix
+# dimensions, i.e. non-negative integers consisting solely of the digits 0-9.
 check_dimens() {
-  for dimen in "$@"; do
-    case $dimen in
-      ''|*[!0-9]*)
-        print_exit "Invalid matrix dimension: $dimen"
+  for i in "$@"; do
+    case $i in
+      '' | *[!0-9]*)
+        print_exit "Invalid matrix dimension: $i"
         ;;
       *)
         ;;
@@ -53,38 +62,43 @@ check_dimens() {
   done
 }
 
-check_flag() {
-  if [ "$1" != "-d" ]; then
-    print_exit "Invalid flag: $1"
-  fi
+# Invokes 'make', with preprocessor flags determined by the CPPGLAG variable,
+# before running the target with the given arguments.
+run_with() {
+  make clean && make CPPFLAGS="$CPPFLAG" && $TARGET $@
 }
 
+# SCRIPT -----------------------------------------------------------------------
+
+# Check first argument for accepted flags.
+case "$1" in
+  -d | --debug)
+    CPPFLAG='-DDEBUG'
+    shift
+    ;;
+  -c | --clean)
+    echo "Running 'make clean'"
+    make clean
+    exit 0
+    ;;
+  -h | --help)
+    echo "$USAGE"
+    exit 0
+    ;;
+esac
+
+# Check subsequent arguments are matrix dimensions before building and running
+# the target.
 case $# in
   1)
-    if [ "$1" = "-h" ]; then
-      echo "$USAGE"
-      exit 0
-    fi
     check_dimens $1
     run_with     $1 $1 $1 $1
-    ;;
-  2)
-    check_flag   $1
-    shift
-    check_dimens $1
-    debug_with   $1 $1 $1 $1
     ;;
   4)
     check_dimens $@
     run_with     $@
     ;;
-  5)
-    check_flag   $1
-    shift
-    check_dimens $@
-    debug_with   $@
-    ;;
   *)
-    print_exit "Invalid number of arguments"
+    print_exit 'Expected 1 or 4 matrix dimensions.'
     ;;
 esac

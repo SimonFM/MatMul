@@ -1,7 +1,6 @@
-
 /*
-  Header defining macros and datatypes used by the MatMul program, as well as
-  the prototype for the core multiplication routine.
+  Header defining the prototype for the core multiplication routine of the
+  MatMul program.
 
   Copyright (c) 2015 by its authors.
 
@@ -14,26 +13,6 @@
 # ifndef COMPLEX_H
 #  include "complex.h"
 # endif
-
-/*
-  The following definition reflects the number of online cores on the system
-  and determines the maximum number of pthreads created. It defaults to 64,
-  which is the number of cores on the target machine stoker. It is intended to
-  be defined at compilation via a preprocessor option if run on a different
-  target.
-*/
-# ifndef NCORES
-#  define NCORES 64
-# endif
-
-/*
-  Matrix indices passed to pthread slave function. Each slave takes on the rows
-  of A in the interval [i0, i1) and the columns of B in the interval [j0, j1).
-*/
-struct thread_args {
-  int i0; int i1;
-  int j0; int j1;
-};
 
 /*
   (Ostensibly) Efficient matrix multiplication routine.
