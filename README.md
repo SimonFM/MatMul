@@ -43,7 +43,7 @@ The following is a brief description of the structure of the MatMul program.
 
 This directory contains all the C code for the MatMul program.
 
-* `matrix.h`  - Defines the complex unit stored in the matrices.
+* `complex.h` - Defines the complex unit stored in the matrices.
 * `matmul.h`  - Defines macros, data- and prototypes used by the MatMul program.
 * `matmul.c`  - Contains the efficient multiplication routine.
 * `harness.c` - Creates random matrices and times the multiplication routine.
