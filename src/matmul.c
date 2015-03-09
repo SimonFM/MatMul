@@ -1,6 +1,10 @@
 /*
   MatMul - Efficient matrix multiplication.
 
+  The recursive, block-oriented function mm() used herein is taken from
+  Michael J. Quinn, "Parallel Programming in C with MPI and OpenMP",
+  4th edition, Chapter 11.
+
   Copyright (c) 2015 by its authors.
 
   This code is distributed under the BSD3 license. See AUTHORS, LICENSE.
@@ -10,62 +14,63 @@
 #include "matmul.h"
 
 /*
-  The following globals are used by the pthread slave function.
+  The following globals are used by the recursive function.
 */
 struct complex ** _A;           // Copy of pointer to matrix A
 struct complex ** _B;           // Copy of pointer to matrix B
 struct complex ** _C;           // Copy of pointer to matrix C
-int _a_dim1, _a_dim2, _b_dim2;  // Copy of dimensions of A and B
+int _a_dim2;                    // Number of columns of A
+
+const int THRESHOLD = 64;
 
 /*
-  Pthread slave function. Each one carries out a number of dot product
-  calculations in the given intervals of rows of A and columns of B.
+  Recursive, block-oriented matrix multiplication routine.
 */
-void * dotProd(void * args) {
+void mm(int crow, int ccol, int arow, int acol, int brow, int bcol,
+        int l, int m, int n) {
 
-  // Slave thread arguments
-  struct thread_args * arg = (struct thread_args *) args;
+  int lhalf[3], mhalf[3], nhalf[3];
+  struct complex * aptr, * bptr, * cptr;
 
-  // Each thread iterates over min(i1, a_dim1) rows of A and
-  // min(j1, b_dim2) columns of B
-  const int i_lo = arg->i0;
-  const int j_lo = arg->j0;
-  const int i_hi = (arg->i1 < _a_dim1) ? arg->i1 : _a_dim1;
-  const int j_hi = (arg->j1 < _b_dim2) ? arg->j1 : _b_dim2;
+  if ((m * n) > THRESHOLD) {
 
-  struct complex sum;
-  struct complex a, b;
-  float a_real, a_imag, b_real, b_imag;
+    // B doesn't fit in cache --- multiply blocks of A, B
 
-  /*
-    The following improves cache hits.
-  */
-  // Copy row in B into a local array to improve cache performance
-  struct complex BI[_a_dim2];
-
-  for (int j = j_lo; (j < j_hi); j++) {
-
-    // Create local B row
-    for (int k = 0; (k < _a_dim2); k++) {
-      BI[k] = _B[k][j];
+    lhalf[0] = 0; lhalf[1] = l / 2; lhalf[2] = l - lhalf[1];
+    mhalf[0] = 0; mhalf[1] = m / 2; mhalf[2] = m - mhalf[1];
+    nhalf[0] = 0; nhalf[1] = n / 2; nhalf[2] = n - nhalf[1];
+    for (int i = 0; (i < 2); i++) {
+      for (int j = 0; (j < 2); j++) {
+        for (int k = 0; (k < 2); k++) {
+          mm(crow + lhalf[i], ccol + mhalf[j],
+             arow + lhalf[i], acol + mhalf[k],
+             brow + mhalf[k], bcol + nhalf[j],
+             lhalf[i + 1], mhalf[k + 1], nhalf[j + 1]);
+        }
+      }
     }
 
-    // Perform multiplication
-    for (int i = i_lo; (i < i_hi); i++) {
-      sum = (struct complex){0.0, 0.0};
-      for (int k = 0; (k < _a_dim2); k++) {
-        a = _A[i][k];
-        b = BI[k];
-        a_real = a.real; a_imag = a.imag;
-        b_real = b.real; b_imag = b.imag;
-        sum.real += (a_real * b_real) - (a_imag * b_imag);
-        sum.imag += (a_real * b_imag) + (a_imag * b_real);
+  } else {
+
+    // B fits in cache --- do standard multiply
+
+    struct complex a, b;
+
+    for (int i = 0; (i < l); i++) {
+      for (int j = 0; (j < n); j++) {
+        cptr = &_C[crow + i][ccol + j];
+        aptr = &_A[arow + i][acol];
+        bptr = &_B[brow][bcol + j];
+        for (int k = 0; (k < m); k++) {
+          a = *aptr; b = *bptr;
+          (*cptr).real += ((a.real * b.real) - (a.imag * b.imag));
+          (*cptr).imag += ((a.real * b.imag) + (a.imag * b.real));
+          aptr ++;
+          bptr += _a_dim2;
+        }
       }
-      _C[i][j] = sum;
     }
   }
-
-  pthread_exit(NULL);
 }
 
 /*
@@ -74,75 +79,10 @@ void * dotProd(void * args) {
 void matmul(struct complex ** A, struct complex ** B, struct complex ** C,
             int a_dim1, int a_dim2, int b_dim2) {
 
-  // Fall back to matmul() on small input
-  if ((a_dim1 < NCORES) && (b_dim2 < NCORES)) {
-
-    struct complex sum;
-    struct complex a, b;
-    float a_real, a_imag, b_real, b_imag;
-
-    for (int i = 0; (i < a_dim1); i++) {
-      for(int j = 0; (j < b_dim2); j++) {
-        sum = (struct complex){0.0, 0.0};
-        for (int k = 0; (k < a_dim2); k++) {
-          // The following code does: sum += A[i][k] * B[k][j];
-          a = A[i][k];
-          b = B[k][j];
-          a_real = a.real; a_imag = a.imag;
-          b_real = b.real; b_imag = b.imag;
-          sum.real += (a_real * b_real) - (a_imag * b_imag);
-          sum.imag += (a_real * b_imag) + (a_imag * b_real);
-        }
-        C[i][j] = sum;
-      }
-    }
-    return;
-
-  }
-
-  /*
-    We now know that one of the matrix dimensions is larger than the number of
-    cores we have, so there is (usually) a reasonably large workload to
-    distribute amongst all cores (particularly on stoker).
-  */
-
-  // Make global copies of parameters for slave threads
+  // Make global copies of parameters for the recursive function
   _A = A; _B = B; _C = C;
-  _a_dim1 = a_dim1; _a_dim2 = a_dim2; _b_dim2 = b_dim2;
+  _a_dim2 = a_dim2;
 
-  // Arrays of pthreads and their arguments
-  pthread_t threads[NCORES];
-  struct thread_args args[NCORES];
-
-  // Distribute largest dimension (either rows or columns) amongst cores
-  if (a_dim1 < b_dim2) {
-
-    // Difference in B column indices between threads
-    const int DELTA = (b_dim2 + NCORES - 1) / NCORES;
-
-    int col = 0;
-    for (int i = 0; (i < NCORES); i++) {
-      args[i] = (struct thread_args){0, a_dim1, col, col + DELTA};
-      pthread_create(&threads[i], NULL, dotProd, (void *) &args[i]);
-      col += DELTA;
-    }
-
-  } else {
-
-    // Difference in A row indices between threads
-    const int DELTA = (a_dim1 + NCORES - 1) / NCORES;
-
-    int row = 0;
-    for (int i = 0; (i < NCORES); i++) {
-      args[i] = (struct thread_args){row, row + DELTA, 0, b_dim2};
-      pthread_create(&threads[i], NULL, dotProd, (void *) &args[i]);
-      row += DELTA;
-    }
-
-  }
-
-  // Round up the slaves :(
-  for (int i = 0; (i < NCORES); i++) {
-    pthread_join(threads[i], NULL);
-  }
+  // Initial call
+  mm(0, 0, 0, 0, 0, 0, a_dim1, a_dim2, b_dim2);
 }
